@@ -1,3 +1,4 @@
+import time
 import asyncio
 import json
 import uuid
@@ -8,7 +9,7 @@ from email.mime.multipart import MIMEMultipart
 import aiosqlite
 from aiohttp import web
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import folium
 import pandas as pd
@@ -26,7 +27,7 @@ RECEIVER_EMAIL =  os.getenv("RECEIVER_EMAIL")
 PASS_EMAIL =  os.getenv("PASS_EMAIL")
 
 # Настройка системы логирования
-logging.basicConfig(level=logging.DEBUG,
+logging.basicConfig(level=logging.INFO,
                     format = "%(asctime)s - %(module)s - %(levelname)s - %(funcName)s: %(lineno)d - %(message)s")
 
 # Создание объекта логгера
@@ -207,7 +208,7 @@ async def handle_post(request):
 
 
         elif 'hole' in json_data:
-            await c.execute("SELECT * FROM hole WHERE activity = 2")
+            await c.execute("SELECT * FROM hole WHERE activity >= 2")
             row = await c.fetchall()
             response_data = {"hole": row}
             logger.info(f"send hole")
@@ -233,38 +234,58 @@ async def create_table():
 
     logger.info(f"create table ok")
 
-
+import heapq
 # добавление ям в таблицу hole и поиск похожих ям
 async def add_hole_table(date, id_user, latitude, longitude, speed, value_hole):
     async with aiosqlite.connect(DATABASE_NAME) as conn:
         c = await conn.cursor()
-
-        # проверка есить ли в тб пожая яма?
-        await c.execute("SELECT ROWID, * FROM hole")
-        row = await c.fetchall()
-
         date_str = date.strftime('%Y-%m-%d %H:%M:%S.%f')
 
-        if len(row)!=0:
-            for item_row in row:
-                # ROWID data id_user latitude longitude speed value_hole activity
-                distance_points = calculateTheDistance(latitude, longitude, item_row[3], item_row[4])
-                if id_user!=item_row[2]: id_user=item_row[2]+"; "+id_user
-                if distance_points < 1.5:
-                    await c.execute("UPDATE hole SET latitude = ?, longitude = ?, value_hole = ?, activity = ?, id_user=? WHERE ROWID = ?",
-                            ((latitude+item_row[3])/2, (longitude+item_row[4])/2, (item_row[5]+value_hole)/2, item_row[7]+1, id_user, item_row[0],))
-                    await conn.commit()
+        # проверка есить ли в тб пожая яма?
+        await c.execute("SELECT ROWID, * FROM hole WHERE date=? and id_user=? and latitude=? and longitude=?", (date_str,id_user,latitude,longitude,))
+        existing_hole = await c.fetchone()
+        if existing_hole:
+            return
         else:
-            await c.execute(
-                "INSERT INTO hole (date, id_user, latitude, longitude, speed, value_hole, activity) VALUES (?, ?, ?,?,?,?,?)",
-                (date_str, id_user, latitude, longitude, speed, value_hole, 1,))
-            await conn.commit()
+            await c.execute("SELECT ROWID, * FROM hole")
+            existing_holes = await c.fetchall()
+
+            if existing_holes:
+                hole_dict = {}
+                for item_row in existing_holes:
+                    distance_points = calculateTheDistance(latitude, longitude, item_row[3], item_row[4])
+                    hole_dict[distance_points]=item_row
+
+                # Find the nearest hole
+                min_key = min(hole_dict.keys())
+                min_element = hole_dict[min_key]
+
+                if min_key < 15:
+                    date_db_str = datetime.strptime(str(min_element[1]), '%Y-%m-%d %H:%M:%S.%f')
+
+                    if id_user == min_element[2] and abs(date-date_db_str)<timedelta(minutes=15):
+                        await c.execute(
+                                "UPDATE hole SET latitude = ?, longitude = ?, value_hole = ?, activity = ?, id_user=? WHERE ROWID = ?",
+                                ((latitude +min_element[3]) / 2, (longitude + min_element[4]) / 2,
+                                 (min_element[5] + value_hole) / 2, 1, id_user, min_element[0],))
+                    else:
+                        id_user = min_element[2] + "; " + id_user
+                        await c.execute("UPDATE hole SET latitude = ?, longitude = ?, value_hole = ?, activity = ?, id_user=? WHERE ROWID = ?",
+                                            ((latitude+min_element[3])/2, (longitude+min_element[4])/2, (min_element[5]+value_hole)/2, min_element[7]+1, id_user, min_element[0],))
+                else:
+                    await c.execute(
+                            "INSERT INTO hole (date, id_user, latitude, longitude, speed, value_hole, activity) VALUES (?, ?, ?,?,?,?,?)",
+                            (date_str, id_user, latitude, longitude, speed, value_hole, 1,))
+            else:
+                await c.execute(
+                    "INSERT INTO hole (date, id_user, latitude, longitude, speed, value_hole, activity) VALUES (?, ?, ?,?,?,?,?)",
+                    (date_str, id_user, latitude, longitude, speed, value_hole, 1,))
+        await conn.commit()
 
 # создание карты с ямами
 async def create_map_hole():
     async with aiosqlite.connect(DATABASE_NAME) as conn:
         c = await conn.cursor()
-
         await c.execute("SELECT latitude, longitude, speed, value_hole FROM hole")
         data = await c.fetchall()
 
@@ -273,7 +294,6 @@ async def create_map_hole():
 
         # Создание карты
         m = folium.Map(location=[data[0][0], data[0][1]], zoom_start=10)
-
         for data_item in data:
             folium.Marker(location=[data_item[0], data_item[1]],
                               popup=data_item[3], icon=folium.Icon(color='black')).add_to(m)
