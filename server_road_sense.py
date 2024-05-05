@@ -16,8 +16,10 @@ import pandas as pd
 from dateutil import parser
 import math
 from dotenv import load_dotenv
+import heapq
 
 EARTH_RADIUS=6372795
+DISTANCE_BETWEN_POSITIONS=15
 
 load_dotenv()
 DATABASE_NAME = os.getenv("DATABASE_NAME")
@@ -234,7 +236,7 @@ async def create_table():
 
     logger.info(f"create table ok")
 
-import heapq
+
 # добавление ям в таблицу hole и поиск похожих ям
 async def add_hole_table(date, id_user, latitude, longitude, speed, value_hole):
     async with aiosqlite.connect(DATABASE_NAME) as conn:
@@ -260,7 +262,7 @@ async def add_hole_table(date, id_user, latitude, longitude, speed, value_hole):
                 min_key = min(hole_dict.keys())
                 min_element = hole_dict[min_key]
 
-                if min_key < 15:
+                if min_key < DISTANCE_BETWEN_POSITIONS:
                     date_db_str = datetime.strptime(str(min_element[1]), '%Y-%m-%d %H:%M:%S.%f')
 
                     if id_user == min_element[2] and abs(date-date_db_str)<timedelta(minutes=15):
@@ -304,6 +306,7 @@ async def create_map_hole():
             logger.info("Сохранена карта map_hole.html")
         except Exception as e:
             logger.info(f"Ошибка при сохранении карты map_hole.html: {e}")
+            await send_error_notification(f"Ошибка при сохранении карты map_hole.html: {e}")
 
 async def reseah_hole(num=2):
     """
@@ -428,6 +431,7 @@ async def reseah_hole(num=2):
 
                                 except Exception as e:
                                     logger.error(f"Ошибка при добавлении в таблицу hole: {e}")
+                                    await send_error_notification(f"Ошибка при добавлении в таблицу hole: {e}")
 
                 # рисуем проезд
                 path_coordinates = list(zip(item_chunk[1], item_chunk[2]))
@@ -441,6 +445,8 @@ async def reseah_hole(num=2):
                 logger.info(f"Сохранена карта {user_table}")
             except Exception as e:
                 logger.error(f"Ошибка при сохранении карты: {e}")
+                await send_error_notification(f"Ошибка при сохранении карты map_hole.html: {e}")
+
 
 async def run_server(port=PORT):
     app = web.Application()
@@ -461,7 +467,7 @@ async def main():
         # Schedule the tasks to run every 120 and 240 seconds respectively
         await asyncio.sleep(60*60*4)#60*60
         asyncio.create_task(reseah_hole())
-        await asyncio.sleep(60*60*12)#60*60*2
+        await asyncio.sleep(60*60*6)#60*60*2
         asyncio.create_task(create_map_hole())
 
 if __name__ == "__main__":
