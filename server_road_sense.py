@@ -265,15 +265,34 @@ async def add_hole_table(date, id_user, latitude, longitude, speed, value_hole):
                 if min_key < DISTANCE_BETWEN_POSITIONS:
                     date_db_str = datetime.strptime(str(min_element[1]), '%Y-%m-%d %H:%M:%S.%f')
 
-                    if id_user == min_element[2] and abs(date-date_db_str)<timedelta(minutes=15):
+                    unique_user_ids_list = list(min_element[2].split('; '))
+                    bool_user = id_user in unique_user_ids_list
+
+                    if (id_user == min_element[2] or bool_user) and abs(date - date_db_str) < timedelta(minutes=15):
                         await c.execute(
-                                "UPDATE hole SET latitude = ?, longitude = ?, value_hole = ?, activity = ?, id_user=? WHERE ROWID = ?",
-                                ((latitude +min_element[3]) / 2, (longitude + min_element[4]) / 2,
-                                 (min_element[5] + value_hole) / 2, 1, id_user, min_element[0],))
+                            "UPDATE hole SET latitude = ?, longitude = ?, value_hole = ?, activity = ?, id_user=? WHERE ROWID = ?",
+                            (
+                                (latitude + min_element[3]) / 2,
+                                (longitude + min_element[4]) / 2,
+                                (min_element[5] + value_hole) / 2,
+                                1,
+                                id_user if id_user == min_element[2] else min_element[2], min_element[0],
+                            )
+                        )
+
                     else:
-                        id_user = min_element[2] + "; " + id_user
-                        await c.execute("UPDATE hole SET latitude = ?, longitude = ?, value_hole = ?, activity = ?, id_user=? WHERE ROWID = ?",
-                                            ((latitude+min_element[3])/2, (longitude+min_element[4])/2, (min_element[5]+value_hole)/2, min_element[7]+1, id_user, min_element[0],))
+                        await c.execute(
+                            "UPDATE hole SET latitude = ?, longitude = ?, value_hole = ?, activity = ?, id_user=? WHERE ROWID = ?",
+                            (
+                                (latitude + min_element[3]) / 2,
+                                (longitude + min_element[4]) / 2,
+                                (min_element[5] + value_hole) / 2,
+                                min_element[7] + 1,
+                                min_element[2] if bool_user else min_element[2] + "; " + id_user,
+                                min_element[0],
+                            )
+                        )
+
                 else:
                     await c.execute(
                             "INSERT INTO hole (date, id_user, latitude, longitude, speed, value_hole, activity) VALUES (?, ?, ?,?,?,?,?)",
@@ -383,14 +402,14 @@ async def reseah_hole(num=2):
             for i, item_chunk in enumerate(data_chunks):
                 for itr in range(0, len(item_chunk), window_size):
                     # определяю доминирующую ось
-                    data_range = item_chunk[[4, 5, 6]].iloc[itr:min(itr + window_size, itr + len(item_chunk))]
-                    max_absolute_acceleration = abs(data_range).max()
+                    chunk_range = item_chunk[[4, 5, 6]].iloc[itr:min(itr + window_size, len(item_chunk))]
+                    max_absolute_acceleration = abs(chunk_range).max()
                     max_axis = max_absolute_acceleration.idxmax()
 
-                    for itr_max_axis in range(0, len(data_range)-1):
-                        if itr_max_axis + 1 < len(data_range):
-                            value_diff = (data_range[max_axis].iloc[itr_max_axis] -
-                                          data_range[max_axis].iloc[itr_max_axis + 1])
+                    for itr_max_axis in range(0, len(chunk_range)):
+                        if itr_max_axis + 1 < len(chunk_range):
+                            value_diff = (chunk_range[max_axis].iloc[itr_max_axis] -
+                                          chunk_range[max_axis].iloc[itr_max_axis + 1])
 
                             if abs(value_diff) >= num:
                                 # нахожу точное значение gps
@@ -399,22 +418,28 @@ async def reseah_hole(num=2):
                                 iterator_start = itr_max_axis+itr
                                 iterator_end = itr_max_axis + itr
 
-                                while (iterator_start > 0 and item_chunk[1].iloc[iterator_start] == item_chunk[1].iloc[iterator_start - 1]):
+                                while (iterator_start > 0 and
+                                        item_chunk[1].iloc[iterator_start] == item_chunk[1].iloc[iterator_start - 1] and
+                                        item_chunk[2].iloc[iterator_start] == item_chunk[2].iloc[iterator_start - 1]):
                                     iterator_start = iterator_start - 1
 
-                                while (iterator_end < len(item_chunk[1]) - 1 and item_chunk[1].iloc[iterator_end] == item_chunk[1].iloc[iterator_end + 1]):
+                                while (iterator_end < len(item_chunk[1]) - 1 and
+                                        item_chunk[1].iloc[iterator_end] ==item_chunk[1].iloc[iterator_end + 1] and
+                                        item_chunk[2].iloc[iterator_end] ==item_chunk[2].iloc[iterator_end + 1]):
                                     iterator_end = iterator_end + 1
+
 
                                 len_range=iterator_end-iterator_start+1
                                 hole_iter = itr_max_axis+itr - iterator_start
 
                                 distance_points = calculateTheDistance(item_chunk[1].iloc[iterator_start], item_chunk[2].iloc[iterator_start],
-                                                         item_chunk[1].iloc[iterator_end+1], item_chunk[2].iloc[iterator_end+1])
+                                                             item_chunk[1].iloc[iterator_end+1], item_chunk[2].iloc[iterator_end+1])
 
                                 lantitude_hole,longitude_hole = calculateLatLon2(item_chunk[1].iloc[iterator_start], item_chunk[2].iloc[iterator_start],
-                                                                                 (distance_points / len_range) * hole_iter,
-                                                                                 calculateBearing(item_chunk[1].iloc[iterator_start], item_chunk[2].iloc[iterator_start],
-                                                                                                  item_chunk[1].iloc[iterator_end+1], item_chunk[2].iloc[iterator_end+1]))
+                                                                                     (distance_points / len_range) * hole_iter,
+                                                                                     calculateBearing(item_chunk[1].iloc[iterator_start], item_chunk[2].iloc[iterator_start],
+                                                                                                      item_chunk[1].iloc[iterator_end+1], item_chunk[2].iloc[iterator_end+1]))
+
                                 # добавляем маркер на карту
                                 folium.Marker(location=[lantitude_hole,longitude_hole],
                                               popup=abs(value_diff), icon=folium.Icon(color='black')).add_to(m)
@@ -465,9 +490,9 @@ async def main():
 
     while True:
         # Schedule the tasks to run every 120 and 240 seconds respectively
-        await asyncio.sleep(60*60*4)#60*60
+        await asyncio.sleep(60 * 60 * 4)  # 60*60
         asyncio.create_task(reseah_hole())
-        await asyncio.sleep(60*60*6)#60*60*2
+        await asyncio.sleep(60 * 60 * 6)  # 60*60*2
         asyncio.create_task(create_map_hole())
 
 if __name__ == "__main__":
